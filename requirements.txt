@@ -4,4 +4,4 @@ plotly
 numpy
 requests
 pytz
-datetime
+scipy
