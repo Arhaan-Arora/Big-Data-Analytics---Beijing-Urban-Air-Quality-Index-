@@ -894,8 +894,138 @@ if len(available_numeric) >= 3:
 else:
     st.info("Not enough pollutant data for correlation analysis.")
 
-# ==== CHART 7: YEAR-OVER-YEAR COMPARISON ====
-st.subheader("7️⃣ Year-over-Year Trend Analysis")
+# ==== CHART 7: POLLUTANT SCATTERPLOT ====
+st.subheader("7️⃣ Pollutant Relationship Scatterplot")
+
+if len(available_numeric) >= 2:
+    col1, col2, col3 = st.columns([2, 2, 1])
+    
+    with col1:
+        x_pollutant = st.selectbox(
+            "X-axis pollutant",
+            available_numeric,
+            index=0,
+            key="scatter_x"
+        )
+    
+    with col2:
+        y_pollutant = st.selectbox(
+            "Y-axis pollutant",
+            available_numeric,
+            index=min(1, len(available_numeric)-1),
+            key="scatter_y"
+        )
+    
+    with col3:
+        color_by = st.selectbox(
+            "Color by",
+            ["None", "AQI Category", "Year", "Month", "Source"],
+            key="scatter_color"
+        )
+    
+    # Prepare data for scatterplot
+    scatter_df = df_filtered[[x_pollutant, y_pollutant, 'datetime']].dropna()
+    
+    if not scatter_df.empty and x_pollutant != y_pollutant:
+        # Add color dimension
+        color_col = None
+        if color_by == "AQI Category" and 'aqi' in df_filtered.columns:
+            scatter_df = scatter_df.join(df_filtered['aqi'])
+            scatter_df['aqi_category'] = scatter_df['aqi'].apply(
+                lambda x: AQI_CATEGORIES.get(int(x), {}).get('label', 'Unknown') if pd.notna(x) else 'Unknown'
+            )
+            color_col = 'aqi_category'
+        elif color_by == "Year":
+            scatter_df['year'] = scatter_df['datetime'].dt.year
+            color_col = 'year'
+        elif color_by == "Month":
+            scatter_df['month'] = scatter_df['datetime'].dt.month_name()
+            color_col = 'month'
+        elif color_by == "Source" and 'source' in df_filtered.columns:
+            scatter_df = scatter_df.join(df_filtered['source'])
+            color_col = 'source'
+        
+        # Create scatterplot
+        fig7 = px.scatter(
+            scatter_df,
+            x=x_pollutant,
+            y=y_pollutant,
+            color=color_col,
+            title=f"Relationship between {x_pollutant.upper()} and {y_pollutant.upper()}",
+            labels={
+                x_pollutant: f"{x_pollutant.upper()} Concentration",
+                y_pollutant: f"{y_pollutant.upper()} Concentration"
+            },
+            opacity=0.6,
+            template='plotly_white',
+            hover_data={'datetime': '|%Y-%m-%d %H:%M'}
+        )
+        
+        # Add trendline
+        if len(scatter_df) > 10:
+            from scipy import stats
+            slope, intercept, r_value, p_value, std_err = stats.linregress(
+                scatter_df[x_pollutant], 
+                scatter_df[y_pollutant]
+            )
+            line_x = np.array([scatter_df[x_pollutant].min(), scatter_df[x_pollutant].max()])
+            line_y = slope * line_x + intercept
+            
+            fig7.add_trace(go.Scatter(
+                x=line_x,
+                y=line_y,
+                mode='lines',
+                name=f'Trendline (R²={r_value**2:.3f})',
+                line=dict(color='red', dash='dash', width=2)
+            ))
+        
+        fig7.update_layout(
+            height=500,
+            hovermode='closest'
+        )
+        
+        st.plotly_chart(fig7, use_container_width=True)
+        
+        # Calculate and display correlation
+        correlation = scatter_df[[x_pollutant, y_pollutant]].corr().iloc[0, 1]
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Correlation Coefficient", f"{correlation:.3f}")
+        with col2:
+            relationship = "Strong" if abs(correlation) > 0.7 else "Moderate" if abs(correlation) > 0.4 else "Weak"
+            st.metric("Relationship Strength", relationship)
+        with col3:
+            st.metric("Data Points", f"{len(scatter_df):,}")
+        
+        with st.expander("ℹ️ Understanding the scatterplot"):
+            st.markdown("""
+            **How to interpret:**
+            - **Each dot** represents a single measurement
+            - **Upward trend**: Positive correlation (both increase together)
+            - **Downward trend**: Negative correlation (one increases, other decreases)
+            - **Scattered pattern**: Weak or no correlation
+            
+            **Correlation strength:**
+            - **0.7 to 1.0**: Strong positive relationship
+            - **0.4 to 0.7**: Moderate positive relationship
+            - **0 to 0.4**: Weak relationship
+            - **Negative values**: Inverse relationship
+            
+            **Common patterns:**
+            - PM2.5 vs PM10: Usually strong positive (both particulate matter)
+            - NO2 vs CO: Moderate positive (both from traffic)
+            - O3 vs NO2: Often negative (O3 forms when NO2 breaks down)
+            
+            **Red dashed line** = Linear regression trendline with R² value
+            """)
+    else:
+        st.info("Please select two different pollutants with available data.")
+else:
+    st.info("Not enough pollutant data available for scatterplot analysis.")
+
+# ==== CHART 8: YEAR-OVER-YEAR COMPARISON ====
+st.subheader("8️⃣ Year-over-Year Trend Analysis")
 
 if 'pm2.5' in df_filtered.columns:
     df_yearly = df_filtered.copy()
@@ -964,7 +1094,7 @@ if 'pm2.5' in df_filtered.columns:
         st.info("Need data from multiple years for year-over-year comparison.")
 
 # ==== EVENT TIMELINE VISUALIZATION ====
-st.subheader("8️⃣ Major Events Timeline")
+st.subheader("9️⃣ Major Events Timeline")
 
 if events:
     timeline_data = []
@@ -1044,6 +1174,8 @@ with col2:
     
     quality_df = pd.DataFrame(quality_data)
     st.dataframe(quality_df, use_container_width=True, hide_index=True)
+
+
 
 # ==== DOWNLOAD SECTION ====
 st.header("💾 Export Data")
