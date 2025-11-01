@@ -584,7 +584,7 @@ if available_pollutants:
     # Toggle view mode
     view_mode = st.radio(
         "Display mode:",
-        ["Smoothed 24-Hour Average", "Raw + Smoothed Overlay"],
+        ["Smoothed 24-Hour Average", "Raw Data"],
         horizontal=True
     )
 
@@ -628,6 +628,7 @@ if available_pollutants:
                 )
                 fig1.update_traces(line=dict(color='red', width=2), name=f"{selected_pollutant.upper()} (24h Avg)")
             else:
+                # Raw Data only (blue line)
                 fig1 = px.line(
                     plot_df,
                     x='datetime',
@@ -642,17 +643,7 @@ if available_pollutants:
                 )
                 for trace in fig1.data:
                     if hasattr(trace, 'mode'):
-                        trace.update(mode='lines', line=dict(width=0.8), opacity=0.4)
-                # Add smoothed overlay
-                fig1.add_trace(
-                    go.Scatter(
-                        x=smoothed['datetime'],
-                        y=smoothed[selected_pollutant],
-                        mode='lines',
-                        line=dict(color='red', width=2),
-                        name=f"{selected_pollutant.upper()} (24h Avg)"
-                    )
-                )
+                        trace.update(mode='lines', line=dict(width=1), opacity=0.7)
 
             # --- WHO guideline line ---
             guidelines = {'pm2.5': 15, 'pm10': 45, 'no2': 25, 'so2': 40, 'o3': 100}
@@ -711,6 +702,7 @@ if available_pollutants:
         st.error(f"Error while creating pollutant chart: {e}")
 else:
     st.info("No pollutant data available to plot.")
+
 
 
 
