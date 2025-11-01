@@ -208,67 +208,76 @@ def convert_to_timezone(df, target_tz):
 
 @st.cache_data(ttl=3600)
 def fetch_openweather_data(lat, lon, api_key, start_date, end_date):
-    """Fetches air quality data from OpenWeather API for a date range."""
+    """Fetches air quality data from OpenWeather API for a date range with retry and timeout protection."""
     if not api_key or api_key.strip() == "":
         return None
-    
-    # Convert dates to timestamps
+
     start_time = int(datetime.combine(start_date, datetime.min.time()).timestamp())
     end_time = int(datetime.combine(end_date, datetime.max.time()).timestamp())
-    
-    # OpenWeather API limits: fetch data in chunks if range is large
+
     all_records = []
-    chunk_days = 365  # Fetch 1 year at a time
-    
+    chunk_days = 180  # Fetch 6 months per chunk (faster, more reliable)
     current_start = start_time
-    
+
     with st.spinner(f"📡 Fetching data from {start_date} to {end_date}..."):
         while current_start < end_time:
             current_end = min(current_start + (chunk_days * 86400), end_time)
-            
             url = f"https://api.openweathermap.org/data/2.5/air_pollution/history?lat={lat}&lon={lon}&start={current_start}&end={current_end}&appid={api_key}"
+
+            success = False
+            for attempt in range(3):  # Retry up to 3 times
+                try:
+                    response = requests.get(url, timeout=60)
+                    response.raise_for_status()
+                    data = response.json()
+
+                    if "list" in data and len(data["list"]) > 0:
+                        for entry in data["list"]:
+                            all_records.append({
+                                "datetime": datetime.utcfromtimestamp(entry["dt"]),
+                                "aqi": entry["main"]["aqi"],
+                                "pm2.5": entry["components"].get("pm2_5"),
+                                "pm10": entry["components"].get("pm10"),
+                                "no2": entry["components"].get("no2"),
+                                "so2": entry["components"].get("so2"),
+                                "co": entry["components"].get("co"),
+                                "o3": entry["components"].get("o3"),
+                                "source": "OpenWeather API"
+                            })
+                    success = True
+                    break  # ✅ success, stop retrying
+
+                except requests.exceptions.ReadTimeout:
+                    st.warning(f"⏳ Timeout while fetching {datetime.utcfromtimestamp(current_start).date()} → retrying ({attempt+1}/3)...")
+                    time.sleep(3)
+                    continue
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 401:
+                        st.error("🔑 Invalid API key or authentication error.")
+                        return None
+                    elif e.response.status_code == 429:
+                        st.warning("⚠️ Rate limit exceeded. Waiting before retry...")
+                        time.sleep(5)
+                        continue
+                    else:
+                        st.error(f"API Error: {e.response.status_code}")
+                        return None
+                except Exception as e:
+                    st.error(f"Connection error: {str(e)}")
+                    time.sleep(2)
+                    continue
+
+            if not success:
+                st.error(f"❌ Failed to fetch data for {datetime.utcfromtimestamp(current_start).date()} to {datetime.utcfromtimestamp(current_end).date()}")
             
-            try:
-                response = requests.get(url, timeout=15)
-                response.raise_for_status()
-                data = response.json()
-                
-                if "list" in data and len(data["list"]) > 0:
-                    for entry in data["list"]:
-                        all_records.append({
-                            "datetime": datetime.utcfromtimestamp(entry["dt"]),
-                            "aqi": entry["main"]["aqi"],
-                            "pm2.5": entry["components"].get("pm2_5"),
-                            "pm10": entry["components"].get("pm10"),
-                            "no2": entry["components"].get("no2"),
-                            "so2": entry["components"].get("so2"),
-                            "co": entry["components"].get("co"),
-                            "o3": entry["components"].get("o3"),
-                            "source": "OpenWeather API"
-                        })
-                
-                # Move to next chunk
-                current_start = current_end + 1
-                
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 401:
-                    st.error("🔑 API Authentication Error: Invalid or inactive API key")
-                    st.info("💡 New API keys can take up to 2 hours to activate. Please wait and try again.")
-                    return None
-                elif e.response.status_code == 429:
-                    st.warning("⚠️ Rate limit exceeded. Please wait and try again.")
-                    return None
-                else:
-                    st.error(f"API Error: {e.response.status_code}")
-                    return None
-            except Exception as e:
-                st.error(f"Connection error: {str(e)}")
-                return None
-    
+            current_start = current_end + 1
+
     if not all_records:
+        st.warning("⚠️ No data received from OpenWeather API. Try a smaller date range or later.")
         return None
-    
+
     return pd.DataFrame(all_records)
+
 
 @st.cache_data(ttl=3600)
 def fetch_waqi_data(api_key, city="beijing", days=7):
@@ -555,86 +564,155 @@ if df_filtered.empty:
 
 st.header("📊 Air Quality Analysis")
 
-# ==== CHART 1: PM2.5 TIMELINE WITH EVENTS ====
-st.subheader("1️⃣ PM2.5 Concentration Timeline")
+# ==== CHART 1: POLLUTANT TIMELINE WITH EVENTS ====
+st.subheader("1️⃣ Pollutant Concentration Timeline")
 
-if 'pm2.5' in df_filtered.columns and not df_filtered['pm2.5'].isnull().all():
-    fig1 = px.line(
-        df_filtered,
-        x='datetime',
-        y='pm2.5',
-        color='source' if 'source' in df_filtered.columns else None,
-        title=f"PM2.5 Levels Over Time ({selected_timezone})",
-        labels={'datetime': 'Date & Time', 'pm2.5': 'PM2.5 Concentration (µg/m³)'},
-        template='plotly_white'
+# Let the user select pollutant
+available_pollutants = ['pm2.5', 'pm10', 'no2', 'so2', 'co', 'o3']
+available_pollutants = [
+    p for p in available_pollutants
+    if p in df_filtered.columns and not df_filtered[p].isnull().all()
+]
+
+if available_pollutants:
+    selected_pollutant = st.selectbox(
+        "Select pollutant to display",
+        available_pollutants,
+        index=available_pollutants.index('pm2.5') if 'pm2.5' in available_pollutants else 0
     )
-    
-    # Add WHO guideline
-    fig1.add_hline(y=15, line_dash="dash", line_color="orange", 
-                   annotation_text="WHO 24h Guideline (15 µg/m³)", annotation_position="right")
-    
-    # Add event markers with detailed hover information
-    for date_str, event_info in events.items():
-        try:
-            event_date = pd.to_datetime(date_str)
-            # Convert to selected timezone for comparison
-            event_date = event_date.tz_localize('UTC').tz_convert(selected_timezone)
-            
-            if df_filtered['datetime'].min() <= event_date <= df_filtered['datetime'].max():
-                # Add vertical line
-                fig1.add_vline(
-                    x=event_date,
-                    line_dash="dot",
-                    line_color="red",
-                    opacity=0.6
-                )
-                
-                # Add annotation with hover text
-                fig1.add_annotation(
-                    x=event_date,
-                    y=df_filtered['pm2.5'].max() * 0.95 if not df_filtered['pm2.5'].isnull().all() else 100,
-                    text=event_info["short"].split('-')[0].strip()[:25],
-                    showarrow=True,
-                    arrowhead=2,
-                    arrowsize=1,
-                    arrowwidth=2,
-                    arrowcolor="red",
-                    ax=0,
-                    ay=-30,
-                    bgcolor="rgba(255,255,255,0.9)",
-                    bordercolor="red",
-                    borderwidth=1,
-                    hovertext=f"<b>{event_info['short']}</b><br><br>{event_info['detail']}",
-                    hoverlabel=dict(bgcolor="white", font_size=12, font_family="Arial")
-                )
-        except Exception:
-            continue
-    
-    fig1.update_layout(
-        hovermode='x unified',
-        height=500,
-        showlegend=True
+
+    # Toggle view mode
+    view_mode = st.radio(
+        "Display mode:",
+        ["Smoothed 24-Hour Average", "Raw + Smoothed Overlay"],
+        horizontal=True
     )
-    
-    st.plotly_chart(fig1, use_container_width=True)
-    
-    with st.expander("ℹ️ How to read this chart"):
-        st.markdown("""
-        **PM2.5** (Particulate Matter 2.5) are tiny particles less than 2.5 micrometers in diameter.
-        
-        - **Orange dashed line**: WHO recommended 24-hour exposure limit (15 µg/m³)
-        - **Red dotted lines**: Major events that may have impacted air quality
-        - **Hover over the line**: See exact values and dates
-        
-        **Health Impact Ranges:**
-        - 0-12 µg/m³: Good
-        - 12-35 µg/m³: Moderate
-        - 35-55 µg/m³: Unhealthy for sensitive groups
-        - 55-150 µg/m³: Unhealthy
-        - 150+ µg/m³: Very unhealthy
-        """)
+
+    try:
+        # Prepare plotting DataFrame
+        plot_df = (
+            df_filtered[['datetime', selected_pollutant, 'source']].copy()
+            if 'source' in df_filtered.columns
+            else df_filtered[['datetime', selected_pollutant]].copy()
+        )
+        plot_df = plot_df.dropna(subset=['datetime', selected_pollutant])
+        plot_df[selected_pollutant] = pd.to_numeric(plot_df[selected_pollutant], errors='coerce')
+        plot_df = plot_df.dropna(subset=[selected_pollutant])
+
+        if plot_df.empty:
+            st.info("No valid numeric data available for the selected pollutant.")
+        else:
+            # Downsample if dataset is huge
+            if len(plot_df) > 200000:
+                st.warning("Large dataset detected — resampling hourly averages for performance.")
+                plot_df = plot_df.set_index('datetime').resample('1H').mean().reset_index()
+
+            # Compute 24-hour rolling average
+            smoothed = plot_df[['datetime', selected_pollutant]].copy()
+            smoothed[selected_pollutant] = (
+                smoothed[selected_pollutant].rolling(window=24, min_periods=1).mean()
+            )
+
+            # --- Plot ---
+            if view_mode == "Smoothed 24-Hour Average":
+                fig1 = px.line(
+                    smoothed,
+                    x='datetime',
+                    y=selected_pollutant,
+                    title=f"{selected_pollutant.upper()} 24-Hour Average Levels ({selected_timezone})",
+                    labels={
+                        'datetime': 'Date & Time',
+                        selected_pollutant: f"{selected_pollutant.upper()} Concentration (µg/m³)"
+                    },
+                    template='plotly_white'
+                )
+                fig1.update_traces(line=dict(color='red', width=2), name=f"{selected_pollutant.upper()} (24h Avg)")
+            else:
+                fig1 = px.line(
+                    plot_df,
+                    x='datetime',
+                    y=selected_pollutant,
+                    color='source' if 'source' in plot_df.columns else None,
+                    title=f"{selected_pollutant.upper()} Levels Over Time ({selected_timezone})",
+                    labels={
+                        'datetime': 'Date & Time',
+                        selected_pollutant: f"{selected_pollutant.upper()} Concentration (µg/m³)"
+                    },
+                    template='plotly_white'
+                )
+                for trace in fig1.data:
+                    if hasattr(trace, 'mode'):
+                        trace.update(mode='lines', line=dict(width=0.8), opacity=0.4)
+                # Add smoothed overlay
+                fig1.add_trace(
+                    go.Scatter(
+                        x=smoothed['datetime'],
+                        y=smoothed[selected_pollutant],
+                        mode='lines',
+                        line=dict(color='red', width=2),
+                        name=f"{selected_pollutant.upper()} (24h Avg)"
+                    )
+                )
+
+            # --- WHO guideline line ---
+            guidelines = {'pm2.5': 15, 'pm10': 45, 'no2': 25, 'so2': 40, 'o3': 100}
+            if selected_pollutant in guidelines:
+                fig1.add_hline(
+                    y=guidelines[selected_pollutant],
+                    line_dash="dash",
+                    line_color="orange",
+                    annotation_text=f"WHO 24h Guideline ({guidelines[selected_pollutant]} µg/m³)",
+                    annotation_position="right"
+                )
+
+            # --- Event markers ---
+            max_val = plot_df[selected_pollutant].max() if plot_df[selected_pollutant].max() > 0 else 10
+            for date_str, event_info in events.items():
+                try:
+                    event_date = pd.to_datetime(date_str).tz_localize('UTC').tz_convert(selected_timezone)
+                    if plot_df['datetime'].min() <= event_date <= plot_df['datetime'].max():
+                        fig1.add_vline(x=event_date, line_dash="dot", line_color="red", opacity=0.6)
+                        fig1.add_annotation(
+                            x=event_date,
+                            y=max_val * 0.95,
+                            text=event_info["short"].split('-')[0].strip()[:25],
+                            showarrow=True,
+                            arrowhead=2,
+                            arrowsize=1,
+                            arrowwidth=2,
+                            arrowcolor="red",
+                            ax=0,
+                            ay=-30,
+                            bgcolor="rgba(255,255,255,0.9)",
+                            bordercolor="red",
+                            borderwidth=1,
+                            hovertext=f"<b>{event_info['short']}</b><br><br>{event_info['detail']}",
+                            hoverlabel=dict(bgcolor="white", font_size=12, font_family="Arial")
+                        )
+                except Exception:
+                    continue
+
+            # --- Y-axis range ---
+            y_min = max(0, float(plot_df[selected_pollutant].min()) * 0.95)
+            y_max = float(plot_df[selected_pollutant].max()) * 1.05 if float(plot_df[selected_pollutant].max()) > 0 else 10
+
+            fig1.update_layout(
+                hovermode='x unified',
+                height=500,
+                showlegend=True,
+                yaxis=dict(range=[y_min, y_max]),
+                legend=dict(bgcolor='rgba(255,255,255,0.7)', bordercolor='gray', borderwidth=1),
+                margin=dict(t=50, b=50, l=60, r=20)
+            )
+
+            st.plotly_chart(fig1, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Error while creating pollutant chart: {e}")
 else:
-    st.info("PM2.5 data not available in the current dataset.")
+    st.info("No pollutant data available to plot.")
+
+
 
 # ==== CHART 2: MULTI-POLLUTANT COMPARISON ====
 st.subheader("2️⃣ Multi-Pollutant Comparison")
