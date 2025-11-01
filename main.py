@@ -32,11 +32,12 @@ LAT, LON = 39.9042, 116.4074
 
 # AQI Categories for interpretation
 AQI_CATEGORIES = {
-    1: {"label": "Good", "color": "#00e400", "range": "0-50"},
-    2: {"label": "Fair", "color": "#ffff00", "range": "51-100"},
-    3: {"label": "Moderate", "color": "#ff7e00", "range": "101-150"},
-    4: {"label": "Poor", "color": "#ff0000", "range": "151-200"},
-    5: {"label": "Very Poor", "color": "#8f3f97", "range": "201-300+"}
+    1: {"label": "Good", "color": "#00e400", "range": "0–50"},
+    2: {"label": "Moderate", "color": "#ffff00", "range": "51–100"},
+    3: {"label": "Unhealthy for Sensitive Groups", "color": "#ff7e00", "range": "101–150"},
+    4: {"label": "Unhealthy", "color": "#ff0000", "range": "151–200"},
+    5: {"label": "Very Unhealthy", "color": "#8f3f97", "range": "201–300"},
+    6: {"label": "Hazardous", "color": "#7e0023", "range": ">300"}
 }
 
 # ==== SIDEBAR: API CONFIGURATION ====
@@ -774,29 +775,33 @@ if 'aqi' in df_filtered.columns and not df_filtered['aqi'].isnull().all():
         lambda x: AQI_CATEGORIES.get(int(x), {}).get('label', 'Unknown')
     )
     
+        #  Build AQI distribution dynamically from your current AQI_CATEGORIES
+    df_filtered_aqi = df_filtered.dropna(subset=['aqi']).copy()
+    df_filtered_aqi['aqi_level'] = df_filtered_aqi['aqi'].astype(int).clip(1, len(AQI_CATEGORIES))
+    df_filtered_aqi['aqi_category'] = df_filtered_aqi['aqi_level'].map(lambda x: AQI_CATEGORIES[x]["label"])
+    df_filtered_aqi['aqi_color'] = df_filtered_aqi['aqi_level'].map(lambda x: AQI_CATEGORIES[x]["color"])
+
+    category_order = [AQI_CATEGORIES[i]["label"] for i in AQI_CATEGORIES]
+    color_map = {AQI_CATEGORIES[i]["label"]: AQI_CATEGORIES[i]["color"] for i in AQI_CATEGORIES}
+
     fig3 = px.histogram(
         df_filtered_aqi,
         x='aqi_category',
         title="Distribution of AQI Categories",
         color='aqi_category',
-        color_discrete_map={
-            "Good": "#00e400",
-            "Fair": "#ffff00",
-            "Moderate": "#ff7e00",
-            "Poor": "#ff0000",
-            "Very Poor": "#8f3f97"
-        },
-        category_orders={"aqi_category": ["Good", "Fair", "Moderate", "Poor", "Very Poor"]}
+        color_discrete_map=color_map,
+        category_orders={'aqi_category': category_order}
     )
-    
+
     fig3.update_layout(
         xaxis_title="AQI Category",
         yaxis_title="Number of Records",
         showlegend=False,
         height=400
     )
-    
+
     st.plotly_chart(fig3, use_container_width=True)
+
     
     # AQI breakdown table
     col1, col2 = st.columns(2)
