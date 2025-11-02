@@ -55,7 +55,7 @@ beijing-air-quality-dashboard/
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/<your-username>/beijing-air-quality-dashboard.git
+   git clone https://github.com/Arhaan-Arora/Big-Data-Analytics---Beijing-Urban-Air-Quality-Index-.git
    cd beijing-air-quality-dashboard
    ```
 
@@ -85,7 +85,7 @@ beijing-air-quality-dashboard/
 Your app will be live at:
 
 ```
-https://<your-username>-beijing-air-quality-dashboard.streamlit.app
+https://<your-username>-beijing-air-quality-dashboard.streamlit.app (Example link, depends in the name you enter.)
 ```
 
 ---
